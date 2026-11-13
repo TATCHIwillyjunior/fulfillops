@@ -56,8 +56,18 @@ async function main() {
       await sleep(config.pollIntervalMs);
     }
   }
+  // Graceful shutdown: the current job finished above; anything we did not
+  // finish is still 'processing' and will be reclaimed after the lock timeout.
   server.close();
   await pool.end();
+  console.log('worker stopped');
 }
+
+function stop(signal) {
+  console.log(`${signal} received, finishing current job then stopping`);
+  running = false;
+}
+process.on('SIGTERM', () => stop('SIGTERM'));
+process.on('SIGINT', () => stop('SIGINT'));
 
 main();
