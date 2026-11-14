@@ -1,5 +1,6 @@
 'use strict';
 const { Pool } = require('pg');
+const crypto = require('node:crypto');
 const config = require('./config');
 
 const pool = new Pool({ connectionString: config.databaseUrl, max: 5 });
@@ -53,15 +54,29 @@ async function completeJob(job) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const claimed = await client.query(
+      `UPDATE worker_jobs
+          SET status = 'completed', locked_at = NULL, updated_at = NOW()
+        WHERE job_id = $1 AND status = 'processing' AND attempts = $2
+        RETURNING order_id`,
+      [job.job_id, job.attempts]
+    );
+    if (claimed.rowCount === 0) {
+      await client.query('COMMIT');
+      return false;
+    }
+    await client.query(
+      `INSERT INTO fulfillment_receipts (order_id, receipt_id)
+       VALUES ($1, $2)
+       ON CONFLICT (order_id) DO NOTHING`,
+      [job.order_id, crypto.randomUUID()]
+    );
     await client.query(
       `UPDATE orders SET status = 'completed', updated_at = NOW() WHERE order_id = $1`,
       [job.order_id]
     );
-    await client.query(
-      `UPDATE worker_jobs SET status = 'completed', locked_at = NULL, updated_at = NOW() WHERE job_id = $1`,
-      [job.job_id]
-    );
     await client.query('COMMIT');
+    return true;
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;

@@ -22,6 +22,17 @@ spec:
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000          # = "node" user in the image
+      initContainers:
+        - name: migrate
+          image: fulfillops:local
+          imagePullPolicy: IfNotPresent
+          command: ["node", "db/migrate.js"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DATABASE_URL
       containers:
         - name: api
           image: fulfillops:local   # for kind: docker build -t fulfillops:local . && kind load docker-image fulfillops:local --name fulfillops

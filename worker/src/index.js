@@ -24,12 +24,18 @@ async function processOne() {
   const endTimer = metrics.jobDuration.startTimer();
   try {
     await fulfil(job);
-    await completeJob(job);
-    metrics.jobsProcessed.inc({ result: 'completed' });
-    console.log(`job ${job.job_id} order ${job.order_id} completed (attempt ${job.attempts})`);
+    const completed = await completeJob(job);
+    if (completed) {
+      metrics.jobsProcessed.inc({ result: 'completed' });
+      console.log(`job ${job.job_id} order ${job.order_id} completed (attempt ${job.attempts})`);
+    } else {
+      console.warn(`stale worker result ignored for job ${job.job_id} (attempt ${job.attempts})`);
+    }
   } catch (err) {
     const { state, delay } = await failJob(pool, job, err);
-    if (state === 'dead_letter') {
+    if (state === 'stale') {
+      console.warn(`stale worker failure ignored for job ${job.job_id} (attempt ${job.attempts})`);
+    } else if (state === 'dead_letter') {
       metrics.jobsProcessed.inc({ result: 'dead_letter' });
       console.error(`job ${job.job_id} dead-lettered after ${job.attempts} attempts: ${err.message}`);
     } else {

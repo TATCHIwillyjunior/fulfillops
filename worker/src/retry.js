@@ -23,23 +23,31 @@ async function failJob(pool, job, err) {
   try {
     await client.query('BEGIN');
     if (state === 'dead_letter') {
-      await client.query(
+      const { rowCount } = await client.query(
         `UPDATE worker_jobs SET status = 'dead_letter', locked_at = NULL, last_error = $1, updated_at = NOW()
-          WHERE job_id = $2`,
-        [String(err.message).slice(0, 500), job.job_id]
+          WHERE job_id = $2 AND status = 'processing' AND attempts = $3`,
+        [String(err.message).slice(0, 500), job.job_id, job.attempts]
       );
+      if (rowCount === 0) {
+        await client.query('COMMIT');
+        return { state: 'stale', delay: 0 };
+      }
       await client.query(
         `UPDATE orders SET status = 'failed', updated_at = NOW() WHERE order_id = $1`,
         [job.order_id]
       );
     } else {
-      await client.query(
+      const { rowCount } = await client.query(
         `UPDATE worker_jobs
             SET status = 'pending', locked_at = NULL, last_error = $1, updated_at = NOW(),
                 next_attempt_at = NOW() + make_interval(secs => $2)
-          WHERE job_id = $3`,
-        [String(err.message).slice(0, 500), delay / 1000, job.job_id]
+          WHERE job_id = $3 AND status = 'processing' AND attempts = $4`,
+        [String(err.message).slice(0, 500), delay / 1000, job.job_id, job.attempts]
       );
+      if (rowCount === 0) {
+        await client.query('COMMIT');
+        return { state: 'stale', delay: 0 };
+      }
       await client.query(
         `UPDATE orders SET status = 'queued', updated_at = NOW() WHERE order_id = $1`,
         [job.order_id]

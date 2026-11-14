@@ -35,11 +35,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Apply DB migrations (if any)
-        run: |
-          for f in db/migrations/*.sql; do
-            [ -e "$f" ] && psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
-          done || true
+      - name: Apply DB migrations
+        run: node db/migrate.js
       - name: Lint
         run: npm run lint --if-present
       - name: Tests
