@@ -2,9 +2,9 @@ name: CI/CD Quality Gate & Supply Chain
 
 on:
   push:
-    branches: [main]
+    branches: [main, prod]
   pull_request:
-    branches: [main]
+    branches: [main, prod]
 
 # least privilege: read-only by default, jobs ask for more only if needed
 permissions:
@@ -38,12 +38,13 @@ jobs:
       - name: Apply DB migrations (if any)
         run: |
           for f in db/migrations/*.sql; do
-            [ -e "$f" ] && psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
-          done || true
+            [ -e "$f" ] || continue
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
       - name: Lint
         run: npm run lint --if-present
-      - name: Tests
-        run: npm test --if-present
+      - name: Unit tests (node:test)
+        run: node --test "worker/test/*.test.js"
 
   # 2) build image, SBOM, vulnerability scan (BLOCKING + informational)
   build-scan:
@@ -110,7 +111,7 @@ jobs:
   # 4) publish immutable image (tag = commit SHA) ONLY on main and ONLY if all gates passed
   publish:
     needs: [test, build-scan, blackbox]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/prod') && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
