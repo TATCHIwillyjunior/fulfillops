@@ -13,6 +13,7 @@ COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node package*.json ./
 COPY --chown=node:node api ./api
 COPY --chown=node:node worker ./worker
+COPY --chown=node:node db ./db
 
 USER node
 EXPOSE 8080

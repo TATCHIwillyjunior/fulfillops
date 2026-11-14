@@ -55,7 +55,22 @@ app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
 // 2. Health Readiness
 app.get('/health/ready', async (req, res) => {
   try {
-    await pool.query('SELECT 1');
+    const { rows } = await pool.query(
+      `SELECT to_regclass('public.catalog') IS NOT NULL AS catalog_ready,
+              to_regclass('public.orders') IS NOT NULL AS orders_ready,
+              to_regclass('public.order_items') IS NOT NULL AS order_items_ready,
+              to_regclass('public.worker_jobs') IS NOT NULL AS jobs_ready,
+              to_regclass('public.fulfillment_receipts') IS NOT NULL AS receipts_ready,
+              EXISTS (
+                SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = 'worker_jobs'
+                   AND column_name = 'next_attempt_at'
+              ) AS retry_schema_ready`
+    );
+    if (!Object.values(rows[0]).every(Boolean)) {
+      return res.status(503).json({ status: 'not_ready' });
+    }
     res.status(200).json({ status: 'ready' });
   } catch (err) {
     res.status(503).json({ status: 'not_ready' });
@@ -80,19 +95,25 @@ app.get('/api/v1/inventory/:sku', async (req, res) => {
 // 5. Order Creation (Atomic Reservation + Idempotency)
 app.post('/api/v1/orders', async (req, res) => {
   const idempotencyKey = req.headers['idempotency-key'];
-  if (!idempotencyKey || idempotencyKey.length < 8 || idempotencyKey.length > 128) {
+  if (typeof idempotencyKey !== 'string' || !/^[\x20-\x7e]{8,128}$/.test(idempotencyKey)) {
     return res.status(400).json({ error: { code: 'IDEMPOTENCY_REQUIRED', message: 'Missing or invalid Idempotency-Key' } });
   }
 
+  if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+    return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'Invalid request body' } });
+  }
   const { customer_id, items } = req.body;
-  if (!customer_id || typeof customer_id !== 'string' || customer_id.length > 64 || !Array.isArray(items) || items.length === 0 || items.length > 10) {
+  if (typeof customer_id !== 'string' || customer_id.length === 0 || customer_id.length > 64 || !Array.isArray(items) || items.length === 0 || items.length > 10) {
     return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'Invalid request body' } });
   }
 
   // Aggregate SKU lines
-  const aggregated = {};
+  const aggregated = Object.create(null);
   for (const item of items) {
-    if (!item.sku || typeof item.sku !== 'string') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'Invalid item in request body' } });
+    }
+    if (typeof item.sku !== 'string' || item.sku.length === 0) {
       return res.status(422).json({ error: { code: 'INVALID_SKU', message: 'Invalid SKU' } });
     }
     if (!Number.isInteger(item.quantity) || item.quantity < 1 || item.quantity > 20) {
@@ -101,13 +122,24 @@ app.post('/api/v1/orders', async (req, res) => {
     aggregated[item.sku] = (aggregated[item.sku] || 0) + item.quantity;
   }
 
-  const payloadHash = crypto.createHash('sha256').update(JSON.stringify({ customer_id, items: aggregated })).digest('hex');
+  const canonicalItems = Object.fromEntries(
+    Object.keys(aggregated).sort().map(sku => [sku, aggregated[sku]])
+  );
+  const payloadHash = crypto.createHash('sha256')
+    .update(JSON.stringify({ customer_id, items: canonicalItems }))
+    .digest('hex');
   const dbClient = await pool.connect();
 
   try {
     await dbClient.query('BEGIN');
 
-    // Idempotency check with DB lock
+    // Serialize requests for the same key across API replicas before checking
+    // for an existing order or reserving any inventory.
+    await dbClient.query(
+      'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+      [idempotencyKey]
+    );
+
     const existingOrder = await dbClient.query(
       'SELECT order_id, payload_hash, status FROM orders WHERE idempotency_key = $1 FOR UPDATE',
       [idempotencyKey]
@@ -176,6 +208,9 @@ app.post('/api/v1/orders', async (req, res) => {
 
 // 6. Get Order Status
 app.get('/api/v1/orders/:order_id', async (req, res) => {
+  if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(req.params.order_id)) {
+    return res.status(404).json({ error: { code: 'ORDER_NOT_FOUND', message: 'Order not found' } });
+  }
   const { rows } = await pool.query('SELECT order_id, status, total_cents FROM orders WHERE order_id = $1', [req.params.order_id]);
   if (rows.length === 0) {
     return res.status(404).json({ error: { code: 'ORDER_NOT_FOUND', message: 'Order not found' } });
@@ -187,6 +222,20 @@ app.get('/api/v1/orders/:order_id', async (req, res) => {
 app.get('/metrics', async (req, res) => {
   res.setHeader('Content-Type', register.contentType);
   res.send(await register.metrics());
+});
+
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: { code: 'INVALID_JSON', message: 'Request body must contain valid JSON' }
+    });
+  }
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: { code: 'REQUEST_TOO_LARGE', message: 'Request body exceeds the 16 KiB limit' }
+    });
+  }
+  return next(err);
 });
 
 const PORT = process.env.PORT || 8080;

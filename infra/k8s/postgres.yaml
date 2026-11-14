@@ -1,8 +1,8 @@
 # PostgreSQL with persistent storage (PVC). Credentials come from Secret "db-secret"
 # which is created BY HAND (never committed):  see steps in the guide.
 #
-# The ConfigMap below is a COPY of db/migrations/001_init.sql so the DB gets its
-# schema + seed on first start. KEEP IT IN SYNC with the real migration file.
+# The ConfigMap below includes the current database schema and seed. Keep it
+# aligned with every file under db/migrations/.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -39,7 +39,16 @@ data:
         status VARCHAR(32) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'dead_letter')),
         locked_at TIMESTAMP WITH TIME ZONE,
         last_error TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_worker_jobs_claimable
+      ON worker_jobs (status, next_attempt_at, job_id);
+    CREATE TABLE IF NOT EXISTS fulfillment_receipts (
+        order_id UUID PRIMARY KEY REFERENCES orders(order_id) ON DELETE CASCADE,
+        receipt_id UUID NOT NULL UNIQUE,
+        fulfilled_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     INSERT INTO catalog (sku, unit_price_cents, available) VALUES
         ('KIT-100', 1299, 7),

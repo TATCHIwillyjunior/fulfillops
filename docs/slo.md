@@ -8,6 +8,24 @@
 | Order fulfilment | 99% of jobs completed, not dead-lettered | `fulfillops_worker_jobs_processed_total` |
 | Queue freshness | fewer than 50 pending jobs for more than 5 min | `fulfillops_worker_queue_depth` |
 
+## Local measurement evidence
+
+On 2026-11-14, `tests/measure_latency.py` recorded 200 successful sequential
+`GET /api/v1/catalog` samples against one API process and a freshly migrated,
+isolated PostgreSQL test database. The observed nearest-rank p95 was **25.906
+ms**, the mean was **9.509 ms**, and there were **0 failures**. Raw UTC samples
+are preserved in
+[`evidence/local-latency-2026-11-14.csv`](./evidence/local-latency-2026-11-14.csv).
+
+This is a local loopback measurement on a development machine, without TLS,
+external network latency, proxy/load-balancer overhead or concurrent client
+load. It is evidence for this test run only, not a production SLO claim.
+Reproduce it with:
+
+```powershell
+python tests\measure_latency.py --base-url http://127.0.0.1:8080 --count 200
+```
+
 ## PromQL
 ```promql
 # Availability (ratio of good requests)

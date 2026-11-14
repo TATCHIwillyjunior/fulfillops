@@ -24,7 +24,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?set in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
     ports:
-      - "5432:5432"
+      - "${DB_HOST_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       # every .sql file here runs ONCE, when the volume is empty (seeds stock only once)
@@ -39,24 +39,44 @@ services:
     <<: *app
     command: ["node", "api/src/index.js"]
     ports:
-      - "8080:8080"
+      - "${API_HOST_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/ready || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  migrate:
+    <<: *app
+    command: ["node", "db/migrate.js"]
+    restart: "no"
+
   # 2nd API instance on the same DB -> needed to prove cross-replica idempotency
   api2:
     <<: *app
     command: ["node", "api/src/index.js"]
     ports:
-      - "8081:8080"
+      - "${API2_HOST_PORT:-8081}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   # 2 worker instances (required by the assignment)
   worker:
     <<: *app
     command: ["node", "worker/src/index.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     deploy:
       replicas: 2
 
