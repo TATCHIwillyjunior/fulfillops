@@ -1,0 +1,30 @@
+{
+  "name": "fulfillops",
+  "version": "1.0.0",
+  "description": "FulfillOps is a lightweight fulfillment and order-processing system built as a DevOps lab project. It exposes an API for catalog lookup, stock validation, and order creation while tracking operational health, idempotency, and worker-based processing.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TATCHIwillyjunior/fulfillops.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/TATCHIwillyjunior/fulfillops/issues"
+  },
+  "homepage": "https://github.com/TATCHIwillyjunior/fulfillops#readme",
+  "dependencies": {
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "prom-client": "^15.1.3"
+  }
+}
