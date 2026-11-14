@@ -68,7 +68,7 @@ jobs:
           path: sbom.spdx.json
       # BLOCKING: CRITICAL/HIGH with an available fix fails the pipeline
       - name: Trivy scan (BLOCKING - CRITICAL,HIGH)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: fulfillops:ci
           format: table
@@ -78,7 +78,7 @@ jobs:
           severity: CRITICAL,HIGH
       # INFORMATIONAL: never fails, only reported
       - name: Trivy scan (INFORMATIONAL - MEDIUM,LOW)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: fulfillops:ci
           format: table

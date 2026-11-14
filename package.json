@@ -8,7 +8,9 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1"
+    "test": "node --test tests/all.test.js",
+    "test:all": "node tests/run-all.js",
+    "test:checker": "python tests/fulfillops_public_checker.py --base-url http://localhost:8080 --concurrency --stress"
   },
   "repository": {
     "type": "git",

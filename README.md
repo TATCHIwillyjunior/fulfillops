@@ -145,29 +145,30 @@ docker compose down -v
 
 ## 5. Automated Testing & Verification
 
-### 1. Public API Contract Checker (15 Checks)
-Always run against a freshly reset test database:
+### 1. Master Test Command (All 24 Tests in One Command)
+Runs the full test suite (9 Node.js tests) and the official public contract checker (15 checks) sequentially with automatic database reset:
 ```bash
-# Reset test database first
-docker compose exec -T db psql -U fulfillops -d fulfillops_db -c "TRUNCATE order_items, worker_jobs, orders CASCADE; UPDATE catalog SET available = 7 WHERE sku = 'KIT-100'; UPDATE catalog SET available = 12 WHERE sku = 'PART-200'; UPDATE catalog SET available = 5 WHERE sku = 'PACK-300';"
-
-# Run all 15 public contract checks including concurrency and stress tests
-python tests/fulfillops_public_checker.py --base-url http://localhost:8080 --concurrency --stress
-# Expected: RESULT: 15 passed / 0 failed / 0 skipped
+npm run test:all
+# Expected output: ALL 24 TESTS PASSED SUCCESSFULLY! (9 Node.js + 15 Public)
 ```
 
-### 2. Comprehensive Test Suite (`npm test`)
-Exercises unit tests, multi-instance API races, duplicate-key replays, worker crash recovery, and poison message dead-letter handling:
+### 2. Consolidated Node.js Test Suite (`npm test`)
+Executes all unit tests, cross-replica 2-API concurrency, duplicate-key replays, and worker crash/poison recovery:
 ```bash
-# Point to your local PostgreSQL port (e.g. 5432)
-# Windows PowerShell:
-$env:DATABASE_URL = "postgres://fulfillops:CHANGE_ME_LOCAL_ONLY@127.0.0.1:5432/fulfillops_db"
 npm test
-Remove-Item Env:DATABASE_URL
+# (Automatically connects to PostgreSQL at 127.0.0.1:5432 and ensures stock)
+# Expected output: 9 passed / 0 failed
+```
 
-# Linux / macOS:
-DATABASE_URL="postgres://fulfillops:CHANGE_ME_LOCAL_ONLY@127.0.0.1:5432/fulfillops_db" npm test
-# Expected: 9 passed / 0 failed
+### 3. Public API Contract Checker (15 Checks)
+Always run against a freshly reset test database:
+```bash
+# Step A: Reset test database inventory
+docker compose exec -T db psql -U fulfillops -d fulfillops_db -c "TRUNCATE order_items, worker_jobs, orders CASCADE; UPDATE catalog SET available = 7 WHERE sku = 'KIT-100'; UPDATE catalog SET available = 12 WHERE sku = 'PART-200'; UPDATE catalog SET available = 5 WHERE sku = 'PACK-300';"
+
+# Step B: Run public contract checks including concurrency and stress tests
+python tests/fulfillops_public_checker.py --base-url http://localhost:8080 --concurrency --stress
+# Expected: RESULT: 15 passed / 0 failed / 0 skipped
 ```
 
 ### 3. API Latency Benchmark (SLO Proof)
