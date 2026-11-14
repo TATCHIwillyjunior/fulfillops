@@ -34,31 +34,105 @@ The application follows a simple service-oriented structure:
 4. The worker processes queued orders asynchronously.
 5. Health and metrics endpoints allow monitoring and deployment validation.
 
-## Local Development
+## Run Locally
+
+The recommended local setup uses Docker Compose. It starts PostgreSQL, two API
+instances, and two worker instances. You do not need to install Node.js or
+PostgreSQL on your computer to run the Compose setup.
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- Node.js 18+
-- PostgreSQL client tools (optional, for direct DB inspection)
+- Docker Desktop installed and running (including Docker Compose)
+- Python 3, if you want to run the API contract checker
 
-### Start the stack
+### Configure and start
 
-```bash
-docker compose up --build
+In PowerShell, open the repository directory and create `.env` from the example
+file if you do not already have one:
+
+```powershell
+cd "C:\path\to\fulfillops"
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-This starts the application and database services defined in `compose.yaml`.
+Review `.env` and set `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`
+to local development values. Do not commit `.env` or use development
+credentials in production.
 
-### Environment variables
+Build and start the services in the background:
 
-The project uses a `.env` file based on the example file:
-
-```bash
-cp .env.example .env
+```powershell
+docker compose up -d --build
+docker compose ps
 ```
 
-Adjust the values to match your local environment before running the services.
+The first build may take a few minutes while Docker downloads the base images
+and installs dependencies. Wait for the `api` service to become healthy, then
+check readiness and list the seeded catalog:
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health/ready
+Invoke-RestMethod http://localhost:8080/api/v1/catalog
+```
+
+The API is available at `http://localhost:8080`; the second API instance is at
+`http://localhost:8081`. Useful endpoints include:
+
+- `GET http://localhost:8080/health/live`
+- `GET http://localhost:8080/health/ready`
+- `GET http://localhost:8080/api/v1/catalog`
+- `GET http://localhost:8080/api/v1/inventory/KIT-100`
+- `GET http://localhost:8080/metrics`
+
+To create a sample order from PowerShell:
+
+```powershell
+$headers = @{ "Idempotency-Key" = [guid]::NewGuid().ToString() }
+$body = @{
+    customer_id = "CUST-LOCAL"
+    items = @(@{ sku = "KIT-100"; quantity = 1 })
+} | ConvertTo-Json -Depth 4
+$order = Invoke-RestMethod -Method Post `
+    -Uri http://localhost:8080/api/v1/orders `
+    -Headers $headers `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+The response contains an `order_id`. Check its status with:
+
+```powershell
+Invoke-RestMethod "http://localhost:8080/api/v1/orders/$($order.order_id)"
+```
+
+### Run the API contract checker
+
+The checker creates orders and consumes inventory. Run it only against this
+local/test stack, never against production:
+
+```powershell
+python tests\fulfillops_public_checker.py --base-url http://localhost:8080
+```
+
+The optional `--concurrency` and `--stress` checks also consume stock. Run them
+only against a freshly seeded, isolated test database:
+
+```powershell
+python tests\fulfillops_public_checker.py --base-url http://localhost:8080 --concurrency --stress
+```
+
+### Logs and shutdown
+
+To follow service logs or stop the stack:
+
+```powershell
+docker compose logs -f
+docker compose down
+```
+
+`docker compose down` preserves the database volume. To permanently delete the
+local database and its data, use `docker compose down -v`; the migrations and
+seed data run again the next time the stack starts.
 
 ## API Endpoints
 
