@@ -1,0 +1,84 @@
+# Local stack: 1 database + 2 API instances + 2 worker instances.
+# Start:  docker compose up -d --build
+# Stop (keeps data):  docker compose down        (add -v ONLY to wipe the DB)
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: fulfillops:local
+  restart: unless-stopped
+  environment: &app-env
+    DATABASE_URL: postgres://${POSTGRES_USER:?set in .env}:${POSTGRES_PASSWORD:?set in .env}@db:5432/${POSTGRES_DB:?set in .env}
+    PORT: "8080"
+  depends_on:
+    db:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+    ports:
+      - "${DB_HOST_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # every .sql file here runs ONCE, when the volume is empty (seeds stock only once)
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    <<: *app
+    command: ["node", "api/src/index.js"]
+    ports:
+      - "${API_HOST_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health/ready || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    <<: *app
+    command: ["node", "db/migrate.js"]
+    restart: "no"
+
+  # 2nd API instance on the same DB -> needed to prove cross-replica idempotency
+  api2:
+    <<: *app
+    command: ["node", "api/src/index.js"]
+    ports:
+      - "${API2_HOST_PORT:-8081}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # 2 worker instances (required by the assignment)
+  worker:
+    <<: *app
+    command: ["node", "worker/src/index.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    deploy:
+      replicas: 2
+
+volumes:
+  pgdata:

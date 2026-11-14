@@ -1,0 +1,125 @@
+# PostgreSQL with persistent storage (PVC). Credentials come from Secret "db-secret"
+# which is created BY HAND (never committed):  see steps in the guide.
+#
+# The ConfigMap below includes the current database schema and seed. Keep it
+# aligned with every file under db/migrations/.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init
+  namespace: fulfillops
+data:
+  001_init.sql: |
+    CREATE TABLE IF NOT EXISTS catalog (
+        sku VARCHAR(64) PRIMARY KEY,
+        unit_price_cents INT NOT NULL CHECK (unit_price_cents >= 0),
+        available INT NOT NULL CHECK (available >= 0)
+    );
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id UUID PRIMARY KEY,
+        customer_id VARCHAR(64) NOT NULL,
+        status VARCHAR(32) NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
+        total_cents INT NOT NULL CHECK (total_cents >= 0),
+        idempotency_key VARCHAR(128) UNIQUE NOT NULL,
+        payload_hash VARCHAR(64) NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id UUID NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+        sku VARCHAR(64) NOT NULL REFERENCES catalog(sku),
+        quantity INT NOT NULL CHECK (quantity > 0)
+    );
+    CREATE TABLE IF NOT EXISTS worker_jobs (
+        job_id SERIAL PRIMARY KEY,
+        order_id UUID UNIQUE NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
+        attempts INT DEFAULT 0,
+        max_attempts INT DEFAULT 3,
+        status VARCHAR(32) DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'completed', 'dead_letter')),
+        locked_at TIMESTAMP WITH TIME ZONE,
+        last_error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        next_attempt_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_worker_jobs_claimable
+      ON worker_jobs (status, next_attempt_at, job_id);
+    CREATE TABLE IF NOT EXISTS fulfillment_receipts (
+        order_id UUID PRIMARY KEY REFERENCES orders(order_id) ON DELETE CASCADE,
+        receipt_id UUID NOT NULL UNIQUE,
+        fulfilled_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO catalog (sku, unit_price_cents, available) VALUES
+        ('KIT-100', 1299, 7),
+        ('PART-200', 599, 12),
+        ('PACK-300', 249, 5)
+    ON CONFLICT (sku) DO NOTHING;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: db            # same hostname as in docker compose, so DATABASE_URL looks the same
+  namespace: fulfillops
+spec:
+  selector:
+    app: fulfillops-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: fulfillops-db
+  namespace: fulfillops
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fulfillops-db
+  template:
+    metadata:
+      labels:
+        app: fulfillops-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: db-secret, key: POSTGRES_DB } }
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: db-secret, key: POSTGRES_USER } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: db-secret, key: POSTGRES_PASSWORD } }
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            requests: { memory: "128Mi", cpu: "100m" }
+            limits: { memory: "512Mi", cpu: "500m" }
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init
+          configMap:
+            name: db-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
