@@ -59,6 +59,11 @@ services:
     command: ["node", "worker/src/index.js"]
     deploy:
       replicas: 2
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9100/health/live || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
 volumes:
   pgdata:

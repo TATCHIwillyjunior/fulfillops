@@ -21,6 +21,9 @@ spec:
           image: fulfillops:local
           imagePullPolicy: IfNotPresent
           command: ["node", "worker/src/index.js"]
+          ports:
+            - name: metrics
+              containerPort: 9100
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -34,3 +37,11 @@ spec:
           resources:
             requests: { memory: "64Mi", cpu: "50m" }
             limits: { memory: "256Mi", cpu: "250m" }
+          livenessProbe:
+            httpGet: { path: /health/live, port: 9100 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 9100 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
